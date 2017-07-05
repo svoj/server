@@ -5336,10 +5336,7 @@ public:
     cmp();
     item= save;
   }
-  Item* get_item()
-  {
-    return item;
-  }
+  
   void clear()
   {
     null_value= false;
