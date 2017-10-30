@@ -1,16 +1,13 @@
 MACRO (MYSQL_CHECK_NUMA)
 
-  IF(CMAKE_SYSTEM_NAME MATCHES "Linux")
+  IF(NOT WITH_NUMA)
+    MESSAGE(STATUS "WITH_NUMA=OFF: NUMA memory allocation policy disabled")
+
+  ELSEIF(CMAKE_SYSTEM_NAME MATCHES "Linux")
     CHECK_INCLUDE_FILES(numa.h HAVE_NUMA_H)
     CHECK_INCLUDE_FILES(numaif.h HAVE_NUMAIF_H)
 
     IF(HAVE_NUMA_H AND HAVE_NUMAIF_H)
-      OPTION(WITH_NUMA "Explicitly set NUMA memory allocation policy" ON)
-    ELSE()
-      OPTION(WITH_NUMA "Explicitly set NUMA memory allocation policy" OFF)
-    ENDIF()
-
-    IF(WITH_NUMA AND HAVE_NUMA_H AND HAVE_NUMAIF_H)
       SET(SAVE_CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
       SET(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} numa)
       CHECK_C_SOURCE_COMPILES(
@@ -31,12 +28,21 @@ MACRO (MYSQL_CHECK_NUMA)
       ENDIF()
     ENDIF()
 
-    IF(WITH_NUMA AND NOT HAVE_LIBNUMA)
+    STRING(TOLOWER "${WITH_NUMA}" WITH_NUMA_LOWERCASE)
+
+    IF(WITH_NUMA_LOWERCASE STREQUAL "auto" AND HAVE_LIBNUMA)
+      MESSAGE(STATUS "WITH_NUMA=AUTO: NUMA memory allocation policy enabled")
+    ELSEIF(WITH_NUMA_LOWERCASE STREQUAL "auto" AND NOT HAVE_LIBNUMA)
+      MESSAGE(STATUS "WITH_NUMA=AUTO: NUMA memory allocation policy disabled")
+    ELSEIF(HAVE_LIBNUMA)
+      MESSAGE(STATUS "WITH_NUMA=ON: NUMA memory allocation policy enabled")
+    ELSE()
       # Forget it in cache, abort the build.
       UNSET(WITH_NUMA CACHE)
       UNSET(NUMA_LIBRARY CACHE)
-      MESSAGE(FATAL_ERROR "Could not find numa headers/libraries")
+      MESSAGE(FATAL_ERROR "WITH_NUMA=ON: Could not find NUMA headers/libraries")
     ENDIF()
+
  ENDIF()
 
 ENDMACRO()
