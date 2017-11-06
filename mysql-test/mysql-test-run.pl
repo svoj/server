@@ -2279,7 +2279,7 @@ sub environment_setup {
   # behaviour when connecting to a non-existing host, so we need to be able
   # to disable those tests when DNS is broken.
   #
-  $ENV{HAVE_BROKEN_DNS}= defined(gethostbyname('invalid_hostname'));
+  #$ENV{HAVE_BROKEN_DNS}= defined(gethostbyname('invalid_hostname'));
 
   # ----------------------------------------------------
   # mysql clients

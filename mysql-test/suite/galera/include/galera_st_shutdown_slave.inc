@@ -1,6 +1,28 @@
+#
+#  Parameters
+#    $conn_node_1= first node connection
+#    $conn_node_2= second node connection
+#    $conn_node_1_port= first node port
+#
+
+--let $n1= node_1
+--let $n2= node_2
+--let $n1_port= $NODE_MYPORT_1
+if ($conn_node_1)
+{
+  --let $n1= $conn_node_1
+}
+if ($conn_node_2)
+{
+  --let $n2= $conn_node_2
+}
+if ($conn_node_1_port)
+{
+  --let $n1_port= $conn_node_1_port
+}
 --echo Performing State Transfer on a server that has been shut down cleanly and restarted
 
---connection node_1
+--connection $n1
 CREATE TABLE t1 (f1 CHAR(255)) ENGINE=InnoDB;
 SET AUTOCOMMIT=OFF;
 START TRANSACTION;
@@ -11,7 +33,7 @@ INSERT INTO t1 VALUES ('node1_committed_before');
 INSERT INTO t1 VALUES ('node1_committed_before');
 COMMIT;
 
---connection node_2
+--connection $n2
 SET AUTOCOMMIT=OFF;
 START TRANSACTION;
 INSERT INTO t1 VALUES ('node2_committed_before');
@@ -24,7 +46,7 @@ COMMIT;
 --echo Shutting down server ...
 --source include/shutdown_mysqld.inc
 
---connection node_1
+--connection $n1
 --let $wait_condition = SELECT VARIABLE_VALUE = 1 FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_size'
 --source include/wait_condition.inc
 
@@ -44,7 +66,7 @@ INSERT INTO t1 VALUES ('node1_to_be_committed_after');
 INSERT INTO t1 VALUES ('node1_to_be_committed_after');
 INSERT INTO t1 VALUES ('node1_to_be_committed_after');
 
---connect node_1a_galera_st_shutdown_slave, 127.0.0.1, root, , test, $NODE_MYPORT_1
+--connect node_1a_galera_st_shutdown_slave, 127.0.0.1, root, , test, $n1_port
 SET AUTOCOMMIT=OFF;
 START TRANSACTION;
 INSERT INTO t1 VALUES ('node1_to_be_rollbacked_after');
@@ -53,7 +75,7 @@ INSERT INTO t1 VALUES ('node1_to_be_rollbacked_after');
 INSERT INTO t1 VALUES ('node1_to_be_rollbacked_after');
 INSERT INTO t1 VALUES ('node1_to_be_rollbacked_after');
 
---connection node_2
+--connection $n2
 --echo Starting server ...
 --source include/start_mysqld.inc
 --source include/wait_until_ready.inc
@@ -67,7 +89,7 @@ INSERT INTO t1 VALUES ('node2_committed_after');
 INSERT INTO t1 VALUES ('node2_committed_after');
 COMMIT;
 
---connection node_1
+--connection $n1
 INSERT INTO t1 VALUES ('node1_to_be_committed_after');
 INSERT INTO t1 VALUES ('node1_to_be_committed_after');
 INSERT INTO t1 VALUES ('node1_to_be_committed_after');
@@ -97,7 +119,7 @@ SELECT COUNT(*) = 0 FROM (SELECT COUNT(*) AS c, f1 FROM t1 GROUP BY f1 HAVING c 
 COMMIT;
 SET AUTOCOMMIT=ON;
 
---connection node_1
+--connection $n1
 SELECT COUNT(*) = 35 FROM t1;
 SELECT COUNT(*) = 0 FROM (SELECT COUNT(*) AS c, f1 FROM t1 GROUP BY f1 HAVING c NOT IN (5, 10)) AS a1;
 DROP TABLE t1;
