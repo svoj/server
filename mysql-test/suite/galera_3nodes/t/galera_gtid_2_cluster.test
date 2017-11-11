@@ -69,8 +69,8 @@ select @@gtid_binlog_state;
 select * from t1;
 
 --connection node_2
-select @@gtid_binlog_state;
 insert into t1 values (1,2);
+select @@gtid_binlog_state;
 #--connection node_3
 #select @@gtid_binlog_state;
 #insert into t1 values (1,3);
@@ -83,6 +83,7 @@ insert into t1 values (1,2);
 
 --connection node_1
 drop table t1;
+select @@gtid_binlog_state;
 stop slave;
 change master to master_use_gtid=no;
 

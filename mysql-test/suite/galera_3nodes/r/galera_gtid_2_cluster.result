@@ -51,11 +51,10 @@ select * from t1;
 cluster	node
 1	1
 2	1
+drop table t1;
 select @@gtid_binlog_state;
 @@gtid_binlog_state
-1-11-2
-insert into t1 values (1,2);
-drop table t1;
+1-11-3,2-21-1
 stop slave;
 change master to master_use_gtid=no;
 stop slave;

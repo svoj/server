@@ -6766,7 +6766,7 @@ Gtid_log_event::do_apply_event(rpl_group_info *rgi)
   thd->variables.gtid_seq_no= this->seq_no;
   rgi->gtid_ev_flags2= flags2;
   thd->reset_for_next_command();
-
+  sql_print_information("Setiya Gtid apply , gtid id %d, %d , %u", this->domain_id , this->server_id, this->seq_no);
   if (opt_gtid_strict_mode && opt_bin_log && opt_log_slave_updates)
   {
     if (mysql_bin_log.check_strict_gtid_sequence(this->domain_id,
