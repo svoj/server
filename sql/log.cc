@@ -5667,7 +5667,7 @@ int THD::binlog_write_table_map(TABLE *table, bool is_transactional,
                           true, LOG_EVENT_SUPPRESS_USE_F,
                           true, 0);
     gtid_event.server_id= this->variables.server_id;
-
+    sql_print_information("Setiya Gtid THD::binlog_write_table_map, gtid id %d, %d , %u", gtid_event.domain_id , gtid_event.server_id, gtid_event.seq_no);
     if ((error= writer.write(&gtid_event)))
       DBUG_RETURN(error);
   }
