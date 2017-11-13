@@ -5,8 +5,22 @@ MACRO(SKIP_ROCKSDB_PLUGIN msg)
   RETURN()
 ENDMACRO()
 
+CHECK_CXX_SOURCE_COMPILES(
+"
+#include <time.h>
+int main() {
+  timer_t t;
+  timer_delete(t);
+  return 0;
+}
+" HAVE_TIMER_DELETE)
+
 IF (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rocksdb/Makefile")
   SKIP_ROCKSDB_PLUGIN("Missing Makefile in rocksdb directory. Try \"git submodule update\".")
+ENDIF()
+
+IF (NOT HAVE_TIMER_DELETE)
+  SKIP_ROCKSDB_PLUGIN("rocksdb cannot be compiled under this platform")
 ENDIF()
 
 CHECK_FUNCTION_EXISTS(sched_getcpu  HAVE_SCHED_GETCPU)
