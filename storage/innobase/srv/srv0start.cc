@@ -2194,13 +2194,6 @@ files_checked:
 			return(srv_init_abort(err));
 		}
 	} else {
-		/* Invalidate the buffer pool to ensure that we reread
-		the page that we read above, during recovery.
-		Note that this is not as heavy weight as it seems. At
-		this point there will be only ONE page in the buf_LRU
-		and there must be no page in the buf_flush list. */
-		buf_pool_invalidate();
-
 		/* Scan and locate truncate log files. Parsed located files
 		and add table to truncate information to central vector for
 		truncate fix-up action post recovery. */
