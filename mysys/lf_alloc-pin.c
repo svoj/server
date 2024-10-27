@@ -395,6 +395,8 @@ void lf_alloc_init(LF_ALLOCATOR *allocator, uint size, uint free_ptr_offset)
   allocator->element_size= size;
   allocator->constructor= 0;
   allocator->destructor= 0;
+  allocator->alloc= my_malloc;
+  allocator->free= my_free;
   DBUG_ASSERT(size >= sizeof(void*) + free_ptr_offset);
 }
 
@@ -417,7 +419,7 @@ void lf_alloc_destroy(LF_ALLOCATOR *allocator)
     uchar *tmp= anext_node(node);
     if (allocator->destructor)
       allocator->destructor(node);
-    my_free(node);
+    allocator->free(node);
     node= tmp;
   }
   lf_pinbox_destroy(&allocator->pinbox);
@@ -445,8 +447,9 @@ void *lf_alloc_new(LF_PINS *pins)
              && LF_BACKOFF());
     if (!node)
     {
-      node= (void *)my_malloc(key_memory_lf_node, allocator->element_size,
-                              MYF(MY_WME));
+      node= (void *) allocator->alloc(key_memory_lf_node,
+                                      allocator->element_size,
+                                      MYF(MY_WME));
       if (allocator->constructor)
         allocator->constructor(node);
 #ifdef MY_LF_EXTRA_DEBUG
