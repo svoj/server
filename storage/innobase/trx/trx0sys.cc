@@ -362,3 +362,8 @@ size_t trx_sys_t::any_active_transactions(size_t *prepared)
 
   return total_trx;
 }
+
+
+void *rw_trx_hash_t::alloc_pool;
+Atomic_counter<size_t> rw_trx_hash_t::offset;
+Atomic_counter<size_t> rw_trx_hash_t::dummy_offset;

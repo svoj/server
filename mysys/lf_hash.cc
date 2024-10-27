@@ -387,7 +387,7 @@ void lf_hash_destroy(LF_HASH *hash)
       if (el->hashnr & 1)
         lf_alloc_direct_free(&hash->alloc, el); /* normal node */
       else
-        my_free(el); /* dummy node */
+        hash->alloc.free(el); /* dummy node */
       el= (LF_SLIST *)next;
     }
   }
@@ -556,8 +556,9 @@ static int initialize_bucket(LF_HASH *hash, LF_SLIST **node,
                               uint bucket, LF_PINS *pins)
 {
   uint parent= my_clear_highest_bit(bucket);
-  LF_SLIST *dummy= (LF_SLIST *)my_malloc(key_memory_lf_slist,
-                                         sizeof(LF_SLIST), MYF(MY_WME));
+  LF_SLIST *dummy= (LF_SLIST *) hash->alloc.alloc(key_memory_lf_slist,
+                                                  sizeof(LF_SLIST),
+                                                  MYF(MY_WME));
   LF_SLIST **tmp= 0, *cur;
   LF_SLIST **el= (LF_SLIST **)lf_dynarray_lvalue(&hash->array, parent);
   if (unlikely(!el || !dummy))
