@@ -38,6 +38,7 @@ Created 3/26/1996 Heikki Tuuri
 #include "trx0trx.h"
 #include "ilist.h"
 #include "my_cpu.h"
+#include "my_sys.h"
 
 #ifdef UNIV_PFS_MUTEX
 extern mysql_pfs_key_t trx_sys_mutex_key;
@@ -358,6 +359,9 @@ struct rw_trx_hash_element_t
 class rw_trx_hash_t
 {
   LF_HASH hash;
+  static void *alloc_pool;
+  static Atomic_counter<size_t> offset;
+  static Atomic_counter<size_t> dummy_offset;
 
 
   template <typename T>
@@ -446,6 +450,30 @@ class rw_trx_hash_t
   }
 
 
+  static void *rw_trx_hash_alloc(PSI_memory_key key, size_t size, myf flags)
+  {
+    void *ptr;
+    if (!alloc_pool)
+      return 0;
+    if (size == (size_t) LF_HASH_OVERHEAD)
+    {
+      ut_a(size == 32);
+      ptr= (char*) alloc_pool + (dummy_offset-= size);
+    }
+    else
+    {
+      ut_a(size == LF_HASH_OVERHEAD + sizeof(rw_trx_hash_element_t));
+      ut_a(size == 64);
+      ptr= (char*) alloc_pool + (offset+= size);
+    }
+    ut_a(offset < dummy_offset);
+    return ptr;
+  }
+
+
+  static void rw_trx_hash_free(void *ptr) {}
+
+
   /**
     Gets LF_HASH pins.
 
@@ -519,10 +547,16 @@ class rw_trx_hash_t
 public:
   void init()
   {
+    alloc_pool= my_mmap(0, my_system_page_size * 10000, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    offset= 0;
+    dummy_offset= my_system_page_size * 10000 - LF_HASH_OVERHEAD;
     lf_hash_init(&hash, sizeof(rw_trx_hash_element_t), LF_HASH_UNIQUE, 0,
                  sizeof(trx_id_t), 0, &my_charset_bin);
     hash.alloc.constructor= rw_trx_hash_constructor;
     hash.alloc.destructor= rw_trx_hash_destructor;
+    hash.alloc.alloc= rw_trx_hash_alloc;
+    hash.alloc.free= rw_trx_hash_free;
     hash.initializer=
       reinterpret_cast<lf_hash_initializer>(rw_trx_hash_initializer);
   }
@@ -532,6 +566,8 @@ public:
   {
     hash.alloc.destructor= rw_trx_hash_shutdown_destructor;
     lf_hash_destroy(&hash);
+    if (alloc_pool)
+      my_munmap(alloc_pool, my_system_page_size * 10000);
   }
 
 

@@ -99,6 +99,8 @@ typedef struct st_lf_allocator {
   uchar * volatile top;
   uint element_size;
   uint32 volatile mallocs;
+  void *(*alloc)(PSI_memory_key key, size_t size, myf MyFlags);
+  void (*free)(void *ptr);
   void (*constructor)(uchar *); /* called, when an object is malloc()'ed */
   void (*destructor)(uchar *);  /* called, when an object is free()'d    */
 } LF_ALLOCATOR;
@@ -117,7 +119,7 @@ uint lf_alloc_pool_count(LF_ALLOCATOR *allocator);
   do {                                    \
     if ((ALLOC)->destructor)              \
       (ALLOC)->destructor((uchar*) ADDR); \
-    my_free(ADDR);                        \
+    (ALLOC)->free(ADDR);                  \
   } while(0)
 
 void *lf_alloc_new(LF_PINS *pins);
