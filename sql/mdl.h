@@ -23,6 +23,7 @@
 #include <mysql_com.h>
 #include <lf.h>
 #include "lex_ident.h"
+#include <atomic>
 
 class THD;
 
@@ -718,6 +719,9 @@ public:
 #endif
   ulonglong m_time;
 
+  /** Property of MDL_lock::Fast_lane, unauthorized access is prohibited. */
+  std::atomic<void*> m_fast_lane;
+
 #ifdef WITH_WSREP
   void wsrep_report(bool debug) const;
 #endif /* WITH_WSREP */
@@ -1135,6 +1139,7 @@ extern "C" int thd_is_connected(MYSQL_THD thd);
   to avoid starving out weak, low-prio locks.
 */
 extern "C" ulong max_write_lock_count;
+extern uint mdl_instances;
 
 typedef int (*mdl_iterator_callback)(MDL_ticket *ticket, void *arg,
                                      bool granted);
