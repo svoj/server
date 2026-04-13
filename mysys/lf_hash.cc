@@ -178,8 +178,8 @@ retry:
   do { /* PTR() isn't necessary below, head is a dummy node */
     cursor.curr= my_assume_aligned<sizeof(LF_SLIST *)>((LF_SLIST *)(*cursor.prev));
     lf_pin(pins, 1, cursor.curr);
-  } while (my_atomic_loadptr(
-           (void **)my_assume_aligned<sizeof(LF_SLIST *)>(cursor.prev))
+  } while (my_atomic_loadptr_explicit(
+           (void **)my_assume_aligned<sizeof(LF_SLIST *)>(cursor.prev), MY_MEMORY_ORDER_RELAXED)
              != cursor.curr && LF_BACKOFF());
   for (;;)
   {
@@ -194,7 +194,7 @@ retry:
                                                 MY_MEMORY_ORDER_RELAXED);
       cursor.next= my_assume_aligned<sizeof(LF_SLIST *)>(PTR(link));
       lf_pin(pins, 0, cursor.next);
-    } while (link != (intptr) my_atomic_loadptr((void *volatile *) &cursor.curr->link)
+    } while (link != (intptr) my_atomic_loadptr_explicit((void *volatile *) &cursor.curr->link, MY_MEMORY_ORDER_RELAXED)
              && LF_BACKOFF());
 
     if (!DELETED(link))
@@ -212,8 +212,8 @@ retry:
         we found a deleted node - be nice, help the other thread
         and remove this deleted node
       */
-      if (my_atomic_casptr((void **) cursor.prev,
-                           (void **) &cursor.curr, cursor.next) && LF_BACKOFF())
+      if (my_atomic_casptr_strong_explicit((void **) cursor.prev,
+                           (void **) &cursor.curr, cursor.next, MY_MEMORY_ORDER_RELAXED, MY_MEMORY_ORDER_RELAXED) && LF_BACKOFF())
         lf_alloc_free(pins, cursor.curr);
       else
         goto retry;

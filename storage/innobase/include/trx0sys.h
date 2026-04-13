@@ -564,6 +564,7 @@ public:
 
   void destroy()
   {
+    fprintf(stderr, "[!] offset: %lu, dummy_offset: %lu\n", (size_t) offset, my_system_page_size * 10000 - (size_t) dummy_offset);
     hash.alloc.destructor= rw_trx_hash_shutdown_destructor;
     lf_hash_destroy(&hash);
     if (alloc_pool)

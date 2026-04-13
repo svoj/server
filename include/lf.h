@@ -48,7 +48,7 @@ int lf_dynarray_iterate(LF_DYNARRAY *array, lf_dynarray_func func, void *arg);
 */
 
 #define LF_PINBOX_PINS 4
-#define LF_PURGATORY_SIZE 100
+#define LF_PURGATORY_SIZE 10
 
 typedef void lf_pinbox_free_func(void *, void *, void*);
 
@@ -75,7 +75,7 @@ typedef struct {
 #define lf_pin(PINS, PIN, ADDR)                                \
   do {                                                          \
     compile_time_assert(PIN < LF_PINBOX_PINS);                  \
-    my_atomic_storeptr(&(PINS)->pin[PIN], (ADDR));              \
+    my_atomic_storeptr_explicit(&(PINS)->pin[PIN], (ADDR), MY_MEMORY_ORDER_RELAXED);              \
   } while(0)
 
 #define lf_unpin(PINS, PIN)        lf_pin(PINS, PIN, NULL)
