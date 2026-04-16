@@ -179,7 +179,6 @@ inline void ReadViewBase::snapshot(trx_t *trx)
     return;
   }
 
-  std::sort(m_ids.begin(), m_ids.end());
   m_up_limit_id= m_ids.front();
   ut_ad(m_up_limit_id <= m_low_limit_id);
 

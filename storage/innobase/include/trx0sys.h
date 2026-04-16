@@ -338,14 +338,6 @@ struct rw_trx_hash_element_t
 
 
   trx_id_t id; /* lf_hash_init() relies on this to be first in the struct */
-
-  /**
-    Transaction serialization number.
-
-    Assigned shortly before the transaction is moved to COMMITTED_IN_MEMORY
-    state. Initially set to TRX_ID_MAX.
-  */
-  Atomic_counter<trx_id_t> no;
   trx_t *trx;
   srw_mutex mutex;
 };
@@ -441,7 +433,6 @@ class rw_trx_hash_t
     ut_ad(element->trx == 0);
     element->trx= trx;
     element->id= trx->id;
-    element->no= TRX_ID_MAX;
     trx->rw_trx_hash_element= element;
   }
 
@@ -510,7 +501,6 @@ class rw_trx_hash_t
     if (element->trx)
       validate_element(element->trx);
     element->mutex.wr_unlock();
-    ut_ad(element->id < element->no);
     return arg->action(element, arg->argument);
   }
 #endif
@@ -842,24 +832,25 @@ class trx_sys_t
   */
   alignas(CPU_LEVEL1_DCACHE_LINESIZE) Atomic_counter<trx_id_t> m_max_trx_id;
 
-
-  /**
-    Solves race conditions between register_rw() and snapshot_ids() as well as
-    race condition between assign_new_trx_no() and snapshot_ids().
-
-    @sa register_rw()
-    @sa assign_new_trx_no()
-    @sa snapshot_ids()
-  */
-  alignas(CPU_LEVEL1_DCACHE_LINESIZE)
-  std::atomic<trx_id_t> m_rw_trx_hash_version;
-
-
   bool m_initialised;
 
   /** False if there is no undo log to purge or rollback */
   bool undo_log_nonempty;
+
 public:
+  class rw_trx_id_t
+  {
+  public:
+    trx_id_t id;
+    trx_id_t no;
+    rw_trx_id_t(trx_id_t a): id(a), no(TRX_ID_MAX) {}
+    bool operator<(const rw_trx_id_t &other) { return id < other.id; }
+  };
+  using rw_trx_ids_t= std::vector<rw_trx_id_t, ut_allocator<rw_trx_id_t>>;
+  rw_trx_ids_t rw_trx_ids{ut_allocator<rw_trx_id_t>(
+                        mem_key_trx_sys_t_rw_trx_ids)};
+  srw_spin_lock rw_trx_ids_latch;
+
   /** List of all transactions. */
   thread_safe_trx_ilist_t trx_list;
 
@@ -1011,11 +1002,8 @@ public:
 
   trx_id_t get_new_trx_id()
   {
-    trx_id_t id= get_new_trx_id_no_refresh();
-    refresh_rw_trx_hash_version();
-    return id;
+    return m_max_trx_id++;
   }
-
 
   /**
     Allocates and assigns new transaction serialisation number.
@@ -1041,8 +1029,11 @@ public:
   */
   void assign_new_trx_no(trx_t *trx)
   {
-    trx->rw_trx_hash_element->no= get_new_trx_id_no_refresh();
-    refresh_rw_trx_hash_version();
+    rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
+    auto it= std::lower_bound(rw_trx_ids.begin(), rw_trx_ids.end(), trx->id);
+    ut_ad(it->id == trx->id);
+    it->no= trx->no= get_new_trx_id();
+    rw_trx_ids_latch.wr_unlock();
   }
 
 
@@ -1071,18 +1062,18 @@ public:
   void snapshot_ids(trx_t *caller_trx, trx_ids_t *ids, trx_id_t *max_trx_id,
                     trx_id_t *min_trx_no)
   {
-    snapshot_ids_arg arg(ids);
-
-    while ((arg.m_id= get_rw_trx_hash_version()) != get_max_trx_id())
-      ut_delay(1);
-    arg.m_no= arg.m_id;
-
     ids->clear();
     ids->reserve(rw_trx_hash.size() + 32);
-    rw_trx_hash.iterate(caller_trx, copy_one_id, &arg);
 
-    *max_trx_id= arg.m_id;
-    *min_trx_no= arg.m_no;
+    rw_trx_ids_latch.rd_lock(SRW_LOCK_CALL);
+    *max_trx_id= *min_trx_no= get_max_trx_id();
+    for (auto it: rw_trx_ids)
+    {
+      ids->push_back(it.id);
+      if (it.no < *min_trx_no)
+        *min_trx_no= it.no;
+    }
+    rw_trx_ids_latch.rd_unlock();
   }
 
 
@@ -1090,7 +1081,6 @@ public:
   void init_max_trx_id(trx_id_t value)
   {
     m_max_trx_id= value;
-    m_rw_trx_hash_version.store(value, std::memory_order_relaxed);
   }
 
 
@@ -1145,9 +1135,11 @@ public:
 
   void register_rw(trx_t *trx)
   {
-    trx->id= get_new_trx_id_no_refresh();
+    rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
+    trx->id= get_new_trx_id();
+    rw_trx_ids.emplace_back(trx->id);
+    rw_trx_ids_latch.wr_unlock();
     rw_trx_hash.insert(trx);
-    refresh_rw_trx_hash_version();
   }
 
 
@@ -1160,7 +1152,13 @@ public:
 
   void deregister_rw(trx_t *trx)
   {
+    rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
+    auto it= std::lower_bound(rw_trx_ids.begin(), rw_trx_ids.end(), trx->id);
+    ut_ad(it->id == trx->id);
+    rw_trx_ids.erase(it);
+    rw_trx_ids_latch.wr_unlock();
     rw_trx_hash.erase(trx);
+    trx->no= TRX_ID_MAX;
   }
 
 
@@ -1242,63 +1240,6 @@ public:
   inline dberr_t reset_page(mtr_t *mtr);
 private:
   static my_bool find_same_or_older_callback(void *el, void *i) noexcept;
-
-
-  struct snapshot_ids_arg
-  {
-    snapshot_ids_arg(trx_ids_t *ids): m_ids(ids) {}
-    trx_ids_t *m_ids;
-    trx_id_t m_id;
-    trx_id_t m_no;
-  };
-
-
-  static my_bool copy_one_id(void* el, void *a)
-  {
-    auto element= static_cast<const rw_trx_hash_element_t *>(el);
-    auto arg= static_cast<snapshot_ids_arg*>(a);
-    if (element->id < arg->m_id)
-    {
-      trx_id_t no= element->no;
-      arg->m_ids->push_back(element->id);
-      if (no < arg->m_no)
-        arg->m_no= no;
-    }
-    return 0;
-  }
-
-
-  /** Getter for m_rw_trx_hash_version, must issue ACQUIRE memory barrier. */
-  trx_id_t get_rw_trx_hash_version()
-  {
-    return m_rw_trx_hash_version.load(std::memory_order_acquire);
-  }
-
-
-  /** Increments m_rw_trx_hash_version, must issue RELEASE memory barrier. */
-  void refresh_rw_trx_hash_version()
-  {
-    m_rw_trx_hash_version.fetch_add(1, std::memory_order_release);
-  }
-
-
-  /**
-    Allocates new transaction id without refreshing rw_trx_hash version.
-
-    This method is extracted for exclusive use by register_rw() and
-    assign_new_trx_no() where new id must be allocated atomically with
-    payload of these methods from MVCC snapshot point of view.
-
-    @sa get_new_trx_id()
-    @sa assign_new_trx_no()
-
-    @return new transaction id
-  */
-
-  trx_id_t get_new_trx_id_no_refresh()
-  {
-    return m_max_trx_id++;
-  }
 };
 
 

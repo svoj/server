@@ -689,6 +689,9 @@ static dberr_t trx_resurrect(trx_undo_t *undo, trx_rseg_t *rseg,
 
   trx_sys.rw_trx_hash.insert(trx);
   trx_sys.rw_trx_hash.put_pins(trx);
+  trx_sys.rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
+  trx_sys.rw_trx_ids.emplace_back(trx->id);
+  trx_sys.rw_trx_ids_latch.wr_unlock();
   if (trx_state_eq(trx, TRX_STATE_ACTIVE))
     *rows_to_undo+= trx->undo_no;
   return trx_resurrect_table_locks(trx, *undo);
@@ -1154,12 +1157,11 @@ inline void trx_t::write_serialisation_history(mtr_t *mtr)
       number before rseg with lesser one. */
       purge_sys.queue_lock();
       trx_sys.assign_new_trx_no(this);
-      const trx_id_t end{rw_trx_hash_element->no};
       rseg->last_page_no= undo->hdr_page_no;
       /* end cannot be less than anything in rseg. User threads only
       produce events when a rollback segment is empty. */
-      rseg->set_last_commit(undo->hdr_offset, end);
-      purge_sys.enqueue(end, *rseg);
+      rseg->set_last_commit(undo->hdr_offset, no);
+      purge_sys.enqueue(no, *rseg);
       purge_sys.queue_unlock();
     }
     else

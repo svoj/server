@@ -27,6 +27,7 @@ Created 3/26/1996 Heikki Tuuri
 #ifndef trx0trx_h
 #define trx0trx_h
 
+#include "dict0types.h"
 #include "trx0types.h"
 #include "lock0types.h"
 #include "que0types.h"
@@ -634,6 +635,7 @@ public:
   Cleared in commit_in_memory() after commit_state(),
   trx_sys_t::deregister_rw(), release_locks(). */
   trx_id_t id;
+  trx_id_t no{TRX_ID_MAX};
   union
   {
     /** The largest encountered transaction identifier for which no

@@ -173,7 +173,7 @@ void
 trx_purge_add_undo_to_history(const trx_t* trx, trx_undo_t*& undo, mtr_t* mtr)
 {
   DBUG_PRINT("trx", ("commit(" TRX_ID_FMT "," TRX_ID_FMT ")",
-                     trx->id, trx_id_t{trx->rw_trx_hash_element->no}));
+                     trx->id, trx_id_t{trx->no}));
   ut_ad(undo->id < TRX_RSEG_N_SLOTS);
   ut_ad(undo == trx->rsegs.m_redo.undo);
   trx_rseg_t *rseg= trx->rsegs.m_redo.rseg;
@@ -275,7 +275,7 @@ trx_purge_add_undo_to_history(const trx_t* trx, trx_undo_t*& undo, mtr_t* mtr)
   mtr->write<2>(*undo_page, TRX_UNDO_SEG_HDR + TRX_UNDO_STATE +
                 undo_page->page.frame, undo_state);
   mtr->write<8,mtr_t::MAYBE_NOP>(*undo_page, undo_header + TRX_UNDO_TRX_NO,
-                                 trx->rw_trx_hash_element->no);
+                                 trx->no);
   mtr->write<2,mtr_t::MAYBE_NOP>(*undo_page, undo_header +
                                  TRX_UNDO_NEEDS_PURGE, 1U);
 }
