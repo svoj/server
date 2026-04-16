@@ -179,6 +179,7 @@ struct TrxFactory {
 		new(&trx->read_view) ReadView();
 
 		trx->rw_trx_hash_pins = 0;
+		trx->rw_trx_ids_slot = std::numeric_limits<uint32_t>::max();
 		trx_init(trx);
 
 		trx->dict_operation_lock_mode = false;
@@ -689,6 +690,7 @@ static dberr_t trx_resurrect(trx_undo_t *undo, trx_rseg_t *rseg,
 
   trx_sys.rw_trx_hash.insert(trx);
   trx_sys.rw_trx_hash.put_pins(trx);
+  trx_sys.rw_trx_ids.register_rw(trx);
   if (trx_state_eq(trx, TRX_STATE_ACTIVE))
     *rows_to_undo+= trx->undo_no;
   return trx_resurrect_table_locks(trx, *undo);
@@ -1127,6 +1129,7 @@ inline void trx_t::write_serialisation_history(mtr_t *mtr)
   trx_undo_t *&undo= rsegs.m_redo.undo;
   if (UNIV_LIKELY(undo != nullptr))
   {
+    trx_id_t end;
     MONITOR_INC(MONITOR_TRX_COMMIT_UNDO);
 
     /* We have to hold exclusive rseg->latch because undo log headers have
@@ -1153,8 +1156,7 @@ inline void trx_t::write_serialisation_history(mtr_t *mtr)
       thread can also fetch redo log records from rseg with greater last commit
       number before rseg with lesser one. */
       purge_sys.queue_lock();
-      trx_sys.assign_new_trx_no(this);
-      const trx_id_t end{rw_trx_hash_element->no};
+      end= trx_sys.assign_new_trx_no(this);
       rseg->last_page_no= undo->hdr_page_no;
       /* end cannot be less than anything in rseg. User threads only
       produce events when a rollback segment is empty. */
@@ -1163,12 +1165,12 @@ inline void trx_t::write_serialisation_history(mtr_t *mtr)
       purge_sys.queue_unlock();
     }
     else
-      trx_sys.assign_new_trx_no(this);
+      end= trx_sys.assign_new_trx_no(this);
     UT_LIST_REMOVE(rseg->undo_list, undo);
     /* Change the undo log segment state from TRX_UNDO_ACTIVE, to
     define the transaction as committed in the file based domain,
     at mtr->commit_lsn() obtained in mtr->commit() below. */
-    trx_purge_add_undo_to_history(this, undo, mtr);
+    trx_purge_add_undo_to_history(this, undo, mtr, end);
   done:
     rseg->release();
     rseg->latch.wr_unlock();

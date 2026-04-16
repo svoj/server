@@ -338,14 +338,6 @@ struct rw_trx_hash_element_t
 
 
   trx_id_t id; /* lf_hash_init() relies on this to be first in the struct */
-
-  /**
-    Transaction serialization number.
-
-    Assigned shortly before the transaction is moved to COMMITTED_IN_MEMORY
-    state. Initially set to TRX_ID_MAX.
-  */
-  Atomic_counter<trx_id_t> no;
   trx_t *trx;
   srw_mutex mutex;
 };
@@ -441,7 +433,6 @@ class rw_trx_hash_t
     ut_ad(element->trx == 0);
     element->trx= trx;
     element->id= trx->id;
-    element->no= TRX_ID_MAX;
     trx->rw_trx_hash_element= element;
   }
 
@@ -510,7 +501,6 @@ class rw_trx_hash_t
     if (element->trx)
       validate_element(element->trx);
     element->mutex.wr_unlock();
-    ut_ad(element->id < element->no);
     return arg->action(element, arg->argument);
   }
 #endif
@@ -833,6 +823,107 @@ private:
   alignas(CPU_LEVEL1_DCACHE_LINESIZE) ilist<trx_t> trx_list;
 };
 
+class rw_trx_vector
+{
+  struct rw_trx_id
+  {
+    Atomic_relaxed<trx_id_t> id{TRX_ID_MAX};
+    Atomic_relaxed<trx_id_t> no{TRX_ID_MAX};
+    trx_t *trx;
+    rw_trx_id(trx_t *t): trx(t) {}
+  };
+  std::vector<rw_trx_id, ut_allocator<rw_trx_id>>
+    ids{ut_allocator<rw_trx_id>(mem_key_trx_sys_t_rw_trx_ids)};
+  mutable srw_spin_lock_low latch;
+
+public:
+  void assign_new_trx_no(const trx_t *trx, trx_id_t no) noexcept
+  {
+    latch.rd_lock();
+    ut_ad(trx->rw_trx_ids_slot < ids.size());
+    ut_ad(ids[trx->rw_trx_ids_slot].trx == trx);
+    ut_ad(ids[trx->rw_trx_ids_slot].id == trx->id);
+    ut_ad(ids[trx->rw_trx_ids_slot].no == TRX_ID_MAX);
+    ids[trx->rw_trx_ids_slot].no= no;
+    latch.rd_unlock();
+  }
+  trx_id_t snapshot_ids(trx_ids_t &view_ids,
+                        const trx_id_t max_trx_id) const noexcept
+  {
+    trx_id_t min_trx_no{max_trx_id};
+    view_ids.clear();
+    latch.rd_lock();
+    view_ids.reserve(ids.size());
+    for (const auto &it : ids)
+    {
+      trx_id_t id{it.id};
+      if (id < max_trx_id)
+      {
+        view_ids.push_back(id);
+        const trx_id_t no{it.no};
+        if (no < min_trx_no)
+          min_trx_no= no;
+      }
+    }
+    latch.rd_unlock();
+    return min_trx_no;
+  }
+  void register_rw(const trx_t *trx) noexcept
+  {
+    latch.rd_lock();
+    ut_ad(trx->rw_trx_ids_slot < ids.size());
+    ut_ad(ids[trx->rw_trx_ids_slot].trx == trx);
+    ut_ad(ids[trx->rw_trx_ids_slot].id == TRX_ID_MAX);
+    ut_ad(ids[trx->rw_trx_ids_slot].no == TRX_ID_MAX);
+    ids[trx->rw_trx_ids_slot].id= trx->id;
+    latch.rd_unlock();
+  }
+  void deregister_rw(const trx_t *trx) noexcept
+  {
+    latch.rd_lock();
+    ut_ad(trx->rw_trx_ids_slot < ids.size());
+    rw_trx_id &slot= ids[trx->rw_trx_ids_slot];
+    ut_ad(slot.trx == trx);
+    ut_ad(slot.id == trx->id);
+    slot.id= TRX_ID_MAX;
+    slot.no= TRX_ID_MAX;
+    latch.rd_unlock();
+  }
+  void register_trx(trx_t *trx) noexcept
+  {
+    ut_ad(trx->rw_trx_ids_slot == std::numeric_limits<uint32_t>::max());
+    latch.wr_lock();
+    trx->rw_trx_ids_slot= static_cast<uint32_t>(ids.size());
+    ids.emplace_back(trx);
+    latch.wr_unlock();
+  }
+  void deregister_trx(trx_t *trx) noexcept
+  {
+    latch.wr_lock();
+    ut_ad(trx->rw_trx_ids_slot < ids.size());
+    ut_ad(ids[trx->rw_trx_ids_slot].trx == trx);
+    if (trx->rw_trx_ids_slot + 1 < ids.size())
+    {
+      trx_t *move_trx= ids.back().trx;
+      ids[trx->rw_trx_ids_slot]= std::move(ids.back());
+      move_trx->rw_trx_ids_slot= trx->rw_trx_ids_slot;
+    }
+    ids.pop_back();
+    latch.wr_unlock();
+    trx->rw_trx_ids_slot= std::numeric_limits<uint32_t>::max();
+  }
+  void create() noexcept
+  {
+    ut_ad(ids.size() == 0);
+    latch.init();
+  }
+  void destroy() noexcept
+  {
+    ut_ad(ids.size() == 0);
+    latch.destroy();
+  }
+};
+
 /** The transaction system central memory data structure. */
 class trx_sys_t
 {
@@ -860,6 +951,8 @@ class trx_sys_t
   /** False if there is no undo log to purge or rollback */
   bool undo_log_nonempty;
 public:
+  rw_trx_vector rw_trx_ids;
+
   /** List of all transactions. */
   thread_safe_trx_ilist_t trx_list;
 
@@ -998,7 +1091,7 @@ public:
             next call to trx_sys.get_new_trx_id()
   */
 
-  trx_id_t get_max_trx_id()
+  trx_id_t get_max_trx_id() const noexcept
   {
     return m_max_trx_id;
   }
@@ -1039,18 +1132,17 @@ public:
 
     @param trx transaction
   */
-  void assign_new_trx_no(trx_t *trx)
+  trx_id_t assign_new_trx_no(trx_t *trx)
   {
-    trx->rw_trx_hash_element->no= get_new_trx_id_no_refresh();
+    trx_id_t no= get_new_trx_id_no_refresh();
+    rw_trx_ids.assign_new_trx_no(trx, no);
     refresh_rw_trx_hash_version();
+    return no;
   }
 
 
   /**
     Takes MVCC snapshot.
-
-    To reduce malloc probablility we reserve rw_trx_hash.size() + 32 elements
-    in ids.
 
     For details about get_rw_trx_hash_version() != get_max_trx_id() spin
     @sa register_rw() and @sa assign_new_trx_no().
@@ -1062,27 +1154,18 @@ public:
     of rw_trx_hash.iterate_no_dups(). It means that some transaction
     identifiers may appear multiple times in ids.
 
-    @param[in,out] caller_trx used to get access to rw_trx_hash_pins
     @param[out]    ids        array to store registered transaction identifiers
     @param[out]    max_trx_id variable to store m_max_trx_id value
-    @param[out]    mix_trx_no variable to store min(no) value
+
+    @return min(no)
   */
 
-  void snapshot_ids(trx_t *caller_trx, trx_ids_t *ids, trx_id_t *max_trx_id,
-                    trx_id_t *min_trx_no)
+  trx_id_t snapshot_ids(trx_ids_t &ids, trx_id_t &max_trx_id) const noexcept
   {
-    snapshot_ids_arg arg(ids);
-
-    while ((arg.m_id= get_rw_trx_hash_version()) != get_max_trx_id())
+    while ((max_trx_id= get_rw_trx_hash_version()) != get_max_trx_id())
       ut_delay(1);
-    arg.m_no= arg.m_id;
 
-    ids->clear();
-    ids->reserve(rw_trx_hash.size() + 32);
-    rw_trx_hash.iterate(caller_trx, copy_one_id, &arg);
-
-    *max_trx_id= arg.m_id;
-    *min_trx_no= arg.m_no;
+    return rw_trx_ids.snapshot_ids(ids, max_trx_id);
   }
 
 
@@ -1146,8 +1229,9 @@ public:
   void register_rw(trx_t *trx)
   {
     trx->id= get_new_trx_id_no_refresh();
-    rw_trx_hash.insert(trx);
+    rw_trx_ids.register_rw(trx);
     refresh_rw_trx_hash_version();
+    rw_trx_hash.insert(trx);
   }
 
 
@@ -1158,8 +1242,9 @@ public:
     MVCC snapshot won't see this transaction anymore.
   */
 
-  void deregister_rw(trx_t *trx)
+  void deregister_rw(trx_t *trx) noexcept
   {
+    rw_trx_ids.deregister_rw(trx);
     rw_trx_hash.erase(trx);
   }
 
@@ -1184,6 +1269,7 @@ public:
   void register_trx(trx_t *trx)
   {
     trx_list.push_front(*trx);
+    rw_trx_ids.register_trx(trx);
   }
 
 
@@ -1194,6 +1280,7 @@ public:
   */
   void deregister_trx(trx_t *trx)
   {
+    rw_trx_ids.deregister_trx(trx);
     trx_list.remove(*trx);
   }
 
@@ -1243,33 +1330,8 @@ public:
 private:
   static my_bool find_same_or_older_callback(void *el, void *i) noexcept;
 
-
-  struct snapshot_ids_arg
-  {
-    snapshot_ids_arg(trx_ids_t *ids): m_ids(ids) {}
-    trx_ids_t *m_ids;
-    trx_id_t m_id;
-    trx_id_t m_no;
-  };
-
-
-  static my_bool copy_one_id(void* el, void *a)
-  {
-    auto element= static_cast<const rw_trx_hash_element_t *>(el);
-    auto arg= static_cast<snapshot_ids_arg*>(a);
-    if (element->id < arg->m_id)
-    {
-      trx_id_t no= element->no;
-      arg->m_ids->push_back(element->id);
-      if (no < arg->m_no)
-        arg->m_no= no;
-    }
-    return 0;
-  }
-
-
   /** Getter for m_rw_trx_hash_version, must issue ACQUIRE memory barrier. */
-  trx_id_t get_rw_trx_hash_version()
+  trx_id_t get_rw_trx_hash_version() const noexcept
   {
     return m_rw_trx_hash_version.load(std::memory_order_acquire);
   }
