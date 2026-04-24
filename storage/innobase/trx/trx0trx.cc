@@ -689,9 +689,7 @@ static dberr_t trx_resurrect(trx_undo_t *undo, trx_rseg_t *rseg,
 
   trx_sys.rw_trx_hash.insert(trx);
   trx_sys.rw_trx_hash.put_pins(trx);
-  trx_sys.rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
-  trx_sys.rw_trx_ids.emplace_back(trx->id);
-  trx_sys.rw_trx_ids_latch.wr_unlock();
+  trx_sys.rw_trx_ids.insert(trx->id);
   if (trx_state_eq(trx, TRX_STATE_ACTIVE))
     *rows_to_undo+= trx->undo_no;
   return trx_resurrect_table_locks(trx, *undo);
