@@ -2332,7 +2332,7 @@ retry_share:
   }
 #endif /* WITH_PARTITION_STORAGE_ENGINE */
 
-  if (!(flags & MYSQL_OPEN_HAS_MDL_LOCK) &&
+  if (0 && !(flags & MYSQL_OPEN_HAS_MDL_LOCK) &&
       table->s->table_category < TABLE_CATEGORY_INFORMATION)
   {
     /*
