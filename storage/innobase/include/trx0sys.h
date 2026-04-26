@@ -825,88 +825,83 @@ private:
 
 class snapshot_mgr
 {
-  class rw_trx_ids_t
+  struct rw_trx_id_t
   {
-    class rw_trx_id_t
-    {
-    public:
-      trx_id_t id;
-      trx_id_t no;
-      rw_trx_id_t(trx_id_t a): id(a), no(TRX_ID_MAX) {}
-      bool operator<(const rw_trx_id_t &other) { return id < other.id; }
-    };
-    std::vector<rw_trx_id_t, ut_allocator<rw_trx_id_t>>
-      ids{ut_allocator<rw_trx_id_t>(mem_key_trx_sys_t_rw_trx_ids)};
-    srw_spin_lock latch;
-
-  public:
-    void assign_new_trx_no(trx_id_t id, trx_id_t no)
-    {
-      latch.wr_lock(SRW_LOCK_CALL);
-      auto it= std::lower_bound(ids.begin(), ids.end(), id);
-      ut_ad(it->id == id);
-      it->no= no;
-      latch.wr_unlock();
-    }
-
-    void snapshot_ids(trx_ids_t *view_ids, trx_id_t max_trx_id,
-                      trx_id_t *min_trx_no)
-    {
-      latch.rd_lock(SRW_LOCK_CALL);
-      for (auto it : ids)
-      {
-        if (it.id < max_trx_id)
-        {
-          view_ids->push_back(it.id);
-          if (it.no < *min_trx_no)
-            *min_trx_no= it.no;
-        }
-      }
-      latch.rd_unlock();
-    }
-
-    void insert(trx_id_t id)
-    {
-      latch.wr_lock(SRW_LOCK_CALL);
-      ids.emplace_back(id);
-      /* TODO: replace sort with iteration/emplace */
-      std::sort(ids.begin(), ids.end());
-      latch.wr_unlock();
-    }
-
-    void erase(trx_id_t id)
-    {
-      latch.wr_lock(SRW_LOCK_CALL);
-      auto it= std::lower_bound(ids.begin(), ids.end(), id);
-      ut_ad(it->id == id);
-      ids.erase(it);
-      latch.wr_unlock();
-    }
-
-    rw_trx_ids_t()
-    {
-      memset((void*) &latch, 0, sizeof(latch));
-      latch.SRW_LOCK_INIT(rw_trx_ids_latch_key);
-    }
-    ~rw_trx_ids_t() { latch.destroy(); }
+    Atomic_relaxed<trx_id_t> id;
+    Atomic_relaxed<trx_id_t> no;
+    trx_t *trx;
+    rw_trx_id_t(trx_t *t): id(TRX_ID_MAX), no(TRX_ID_MAX), trx(t) {}
   };
-
-  rw_trx_ids_t *ids;
-  size_t num_ids;
+  std::vector<rw_trx_id_t, ut_allocator<rw_trx_id_t>>
+    ids{ut_allocator<rw_trx_id_t>(mem_key_trx_sys_t_rw_trx_ids)};
+  srw_spin_lock latch;
 
 public:
-  void assign_new_trx_no(trx_id_t id, trx_id_t no)
-  { ids[id % num_ids].assign_new_trx_no(id, no); }
+  void assign_new_trx_no(trx_t *trx)
+  {
+    trx->mutex_lock();
+    ids[trx->rw_trx_ids_slot].no= trx->no;
+    trx->mutex_unlock();
+  }
   void snapshot_ids(trx_ids_t *view_ids, trx_id_t max_trx_id,
                     trx_id_t *min_trx_no)
   {
-    for (size_t i= 0; i < num_ids; i++)
-      ids[i].snapshot_ids(view_ids, max_trx_id, min_trx_no);
+    latch.rd_lock(SRW_LOCK_CALL);
+    for (auto it : ids)
+    {
+      trx_id_t id= it.id;
+      if (id < max_trx_id)
+      {
+        view_ids->push_back(id);
+        trx_id_t no= it.no;
+        if (no < *min_trx_no)
+          *min_trx_no= no;
+      }
+    }
+    latch.rd_unlock();
   }
-  void insert(trx_id_t id) { ids[id % num_ids].insert(id); }
-  void erase(trx_id_t id) { ids[id % num_ids].erase(id); }
-  void create() { num_ids= 4; ids= new rw_trx_ids_t[num_ids]; }
-  void destroy() { delete [] ids; }
+  void insert(trx_t *trx)
+  {
+    trx->mutex_lock();
+    ut_ad(ids[trx->rw_trx_ids_slot].no == TRX_ID_MAX);
+    ids[trx->rw_trx_ids_slot].id= trx->id;
+    trx->mutex_unlock();
+  }
+  void erase(trx_t *trx)
+  {
+    trx->mutex_lock();
+    ids[trx->rw_trx_ids_slot].id= TRX_ID_MAX;
+    ids[trx->rw_trx_ids_slot].no= TRX_ID_MAX;
+    trx->mutex_unlock();
+  }
+  void register_trx(trx_t *trx)
+  {
+    latch.wr_lock(SRW_LOCK_CALL);
+    trx->rw_trx_ids_slot= static_cast<uint32_t>(ids.size());
+    ids.emplace_back(trx);
+    latch.wr_unlock();
+  }
+  void deregister_trx(trx_t *trx)
+  {
+    latch.wr_lock(SRW_LOCK_CALL);
+    if (trx->rw_trx_ids_slot + 1 < ids.size())
+    {
+      trx_t *move_trx= ids.back().trx;
+      move_trx->mutex_lock();
+      ids[trx->rw_trx_ids_slot]= std::move(ids.back());
+      move_trx->rw_trx_ids_slot= trx->rw_trx_ids_slot;
+      move_trx->mutex_unlock();
+    }
+    ids.pop_back();
+    latch.wr_unlock();
+    trx->rw_trx_ids_slot= std::numeric_limits<uint32_t>::max();
+  }
+  void create()
+  {
+    memset((void*) &latch, 0, sizeof(latch));
+    latch.SRW_LOCK_INIT(rw_trx_ids_latch_key);
+  }
+  void destroy() { latch.destroy(); }
 };
 
 /** The transaction system central memory data structure. */
@@ -1105,7 +1100,7 @@ public:
   void assign_new_trx_no(trx_t *trx)
   {
     trx->no= get_new_trx_id();
-    rw_trx_ids.assign_new_trx_no(trx->id, trx->no);
+    rw_trx_ids.assign_new_trx_no(trx);
   }
 
 
@@ -1200,7 +1195,7 @@ public:
   void register_rw(trx_t *trx)
   {
     trx->id= get_new_trx_id();
-    rw_trx_ids.insert(trx->id);
+    rw_trx_ids.insert(trx);
     rw_trx_hash.insert(trx);
   }
 
@@ -1214,7 +1209,7 @@ public:
 
   void deregister_rw(trx_t *trx)
   {
-    rw_trx_ids.erase(trx->id);
+    rw_trx_ids.erase(trx);
     rw_trx_hash.erase(trx);
     trx->no= TRX_ID_MAX;
   }
@@ -1240,6 +1235,7 @@ public:
   void register_trx(trx_t *trx)
   {
     trx_list.push_front(*trx);
+    rw_trx_ids.register_trx(trx);
   }
 
 
@@ -1250,6 +1246,7 @@ public:
   */
   void deregister_trx(trx_t *trx)
   {
+    rw_trx_ids.deregister_trx(trx);
     trx_list.remove(*trx);
   }
 

@@ -636,6 +636,7 @@ public:
   trx_sys_t::deregister_rw(), release_locks(). */
   trx_id_t id;
   trx_id_t no{TRX_ID_MAX};
+  uint32_t rw_trx_ids_slot{std::numeric_limits<uint32_t>::max()};
   union
   {
     /** The largest encountered transaction identifier for which no
