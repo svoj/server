@@ -1801,7 +1801,7 @@ int ha_commit_trans(THD *thd, bool all)
     calling ha_commit_trans() from spader_commit().
   */
 
-  if ((rw_trans || no_rollback) && !thd->backup_commit_lock)
+  if (0 && (rw_trans || no_rollback) && !thd->backup_commit_lock)
   {
     /*
       Acquire a metadata lock which will ensure that COMMIT is blocked
