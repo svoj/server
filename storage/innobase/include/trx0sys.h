@@ -838,18 +838,11 @@ class trx_sys_t
   bool undo_log_nonempty;
 
 public:
-  class rw_trx_id_t
-  {
-  public:
-    trx_id_t id;
-    trx_id_t no;
-    rw_trx_id_t(trx_id_t a): id(a), no(TRX_ID_MAX) {}
-    bool operator<(const rw_trx_id_t &other) { return id < other.id; }
-  };
-  using rw_trx_ids_t= std::vector<rw_trx_id_t, ut_allocator<rw_trx_id_t>>;
-  rw_trx_ids_t rw_trx_ids{ut_allocator<rw_trx_id_t>(
+  using rw_trx_ids_t= std::vector<trx_id_t, ut_allocator<trx_id_t>>;
+  alignas(CPU_LEVEL1_DCACHE_LINESIZE) rw_trx_ids_t rw_trx_ids{ut_allocator<trx_id_t>(
                         mem_key_trx_sys_t_rw_trx_ids)};
-  srw_spin_lock rw_trx_ids_latch;
+  alignas(CPU_LEVEL1_DCACHE_LINESIZE) UT_LIST_BASE_NODE_T(trx_t) serialisation_list;
+  alignas(CPU_LEVEL1_DCACHE_LINESIZE) srw_lock rw_trx_ids_latch;
 
   /** List of all transactions. */
   thread_safe_trx_ilist_t trx_list;
@@ -1030,9 +1023,8 @@ public:
   void assign_new_trx_no(trx_t *trx)
   {
     rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
-    auto it= std::lower_bound(rw_trx_ids.begin(), rw_trx_ids.end(), trx->id);
-    ut_ad(it->id == trx->id);
-    it->no= trx->no= get_new_trx_id();
+    trx->no= get_new_trx_id();
+    UT_LIST_ADD_LAST(serialisation_list, trx);
     rw_trx_ids_latch.wr_unlock();
   }
 
@@ -1066,13 +1058,15 @@ public:
     ids->reserve(rw_trx_hash.size() + 32);
 
     rw_trx_ids_latch.rd_lock(SRW_LOCK_CALL);
+    auto size= rw_trx_ids.size();
     *max_trx_id= *min_trx_no= get_max_trx_id();
-    for (auto it: rw_trx_ids)
-    {
-      ids->push_back(it.id);
-      if (it.no < *min_trx_no)
-        *min_trx_no= it.no;
-    }
+    ids->reserve(size);
+    ids->resize(size);
+    memmove(ids->data(), &rw_trx_ids[0], sizeof(trx_ids_t::value_type) * size);
+    if (trx_t *trx= UT_LIST_GET_FIRST(serialisation_list))
+      *min_trx_no= trx->no;
+    else
+      *min_trx_no= *max_trx_id;
     rw_trx_ids_latch.rd_unlock();
   }
 
@@ -1154,8 +1148,10 @@ public:
   {
     rw_trx_ids_latch.wr_lock(SRW_LOCK_CALL);
     auto it= std::lower_bound(rw_trx_ids.begin(), rw_trx_ids.end(), trx->id);
-    ut_ad(it->id == trx->id);
+    ut_ad(*it == trx->id);
     rw_trx_ids.erase(it);
+    if (trx->no && trx->no != TRX_ID_MAX)
+      UT_LIST_REMOVE(serialisation_list, trx);
     rw_trx_ids_latch.wr_unlock();
     rw_trx_hash.erase(trx);
     trx->no= TRX_ID_MAX;

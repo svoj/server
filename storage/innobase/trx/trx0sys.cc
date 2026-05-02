@@ -179,6 +179,7 @@ void trx_sys_t::create()
   for (auto &rseg : rseg_array)
     rseg.init(nullptr, FIL_NULL);
   rw_trx_ids_latch.SRW_LOCK_INIT(rw_trx_ids_latch_key);
+  UT_LIST_INIT(serialisation_list, &trx_t::no_list);
 }
 
 size_t trx_sys_t::history_size()
@@ -375,6 +376,7 @@ trx_sys_t::close()
 
 	ut_a(trx_list.empty());
 	trx_list.close();
+	ut_a(UT_LIST_GET_LEN(serialisation_list) == 0);
 	rw_trx_ids_latch.destroy();
 	m_initialised = false;
 }

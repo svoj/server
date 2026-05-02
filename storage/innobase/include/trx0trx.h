@@ -764,6 +764,8 @@ public:
   the thread that is associated with the transaction. */
   Atomic_relaxed<trx_state_t> state;
 
+  UT_LIST_NODE_T(trx_t) no_list;
+
   /** The locks of the transaction. Protected by lock_sys.latch
   (insertions also by trx_t::mutex). */
   alignas(CPU_LEVEL1_DCACHE_LINESIZE) trx_lock_t lock;
